@@ -7,6 +7,11 @@ import glob
 import skimage
 from skimage import measure
 import string 
+import pickle
+from scipy.cluster.vq import *
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from keras import models
 # %%
 
 ############ UNCOMMENT FOR RECTIFICATION OF THE IMAGES ############
@@ -204,6 +209,28 @@ object_spawn_region = img_baseline_gray[300:350,1025:1125]
 object_disap_region = img_baseline_gray[480:700,200:325]
 # object_spawn_region_screenshot = img_baseline[250:400,975:1150]
 
+
+
+model = models.load_model('/home/alex/Alex/DTU/Courses/perception/project/model')
+
+def classify_image(img):
+    resized_image = cv2.resize(img, (256, 256))
+    resized_image = resized_image/255
+    resized_image = np.reshape(resized_image,(1,256,256,3))
+    # resized_image = [np.newaxis,resized_image_mid]
+    print(np.shape(resized_image))
+    pred = model.predict(resized_image)
+    pred = pred.argmax(axis=1)
+    
+    if pred==0:
+        label="book"
+    elif pred==1:
+        label="box"
+    else:
+        label="cup"
+        
+    return label
+
 def update(x, P, Z, H, R):
     ### Insert update function
     I_in = np.identity(np.shape(P)[0])
@@ -257,7 +284,7 @@ def reset_kalman_pos():
                         [0]])# vel along the y-axis
     P_x = np.identity(2)*20000
     u_x = np.array([[0],[0]])
-    F_x = np.array(  [[1.012, 1],
+    F_x = np.array(  [[1.01, 1],
                         [0, 1]])
     H_x = np.array([[1, 0]])
     R_x = np.array([[1]])
@@ -274,6 +301,33 @@ def reset_kalman_pos():
 # R_y = np.array([[1]])
 # I_y = np.identity(2)
 
+# variables needed: voc, k, class_names, clf 
+def classifyBoW(image):
+    # load parmeters (can be loaded only ones at the beginning of the code)
+    #clf, classes_names, stdSlr, k, voc, train_features = joblib.load("bof.pkl")
+    file=open('bof_p.pkl', 'rb')
+    clf, classes_names, stdSlr, k, voc, train_features = pickle.load(file)
+    print(clf)
+    # Create feature extraction and keypoint detector objects
+    sift = cv2.xfeatures2d.SIFT_create(200)
+
+    # List where all the descriptors are stored
+    kpts, descriptors = sift.detectAndCompute(image,None)
+
+    test_features = np.zeros((1, k), "float32")
+
+    words, distance = vq(descriptors,voc)
+    for w in words:
+        test_features[0][w] += 1
+
+    # Perform Tf-Idf vectorization
+    nbr_occurences = np.sum( (test_features > 0) * 1, axis = 0)
+    idf = np.array(np.log((1.0+1) / (1.0*nbr_occurences + 1)), 'float32')
+
+    # Scale the features
+    test_features = stdSlr.transform(test_features)
+    prediction =  classes_names[clf.predict(test_features)[0]]
+    return prediction
 
 for image in images:
     img_frame = cv2.imread(image)
@@ -300,7 +354,7 @@ for image in images:
     # print("Spawn top left:")
     # print(v_int_in,h_int_in)
     if v_int_in not in range(300-10,300+10,1) or h_int_in not in range(1025-10,1025+10,1):
-        if cnt_in > 25 and object_on_conveyor == 0:
+        if cnt_in > 18 and object_on_conveyor == 0:
             object_on_conveyor = 1
             new_object = True
             object_area = 0
@@ -314,6 +368,8 @@ for image in images:
             cv2.waitKey(15)
         else: 
             cnt_in=cnt_in+1
+            # plt.figure(figsize=(12,12))
+            # plt.imshow(b_box)
     else:
         if cnt_in > 0:
             cnt_in=cnt_in-1
@@ -343,6 +399,7 @@ for image in images:
             cnt_out=cnt_out-1
     # print(cnt_in,cnt_out)
 
+    # object_on_conveyor= 1
     
     if object_on_conveyor:
 
@@ -362,6 +419,7 @@ for image in images:
         img_frame_diff_hsv = cv2.absdiff(img_baseline_hsv, img_frame_hsv)
         img_frame_diff_bgr = cv2.cvtColor(img_frame_diff_hsv, cv2.COLOR_HSV2BGR)
         img_frame_diff_gray = cv2.cvtColor(img_frame_diff_bgr, cv2.COLOR_BGR2GRAY)
+        img_frame_diff_gray[:,-80:] = 0
         # plt.figure(figsize = (20,20))
         # plt.imshow(img_frame_diff_gray, cmap='gray')
         
@@ -386,6 +444,7 @@ for image in images:
 
         img_frame_diff_bgr = cv2.absdiff(img_baseline, img_frame)
         img_frame_diff_gray = cv2.cvtColor(img_frame_diff_bgr, cv2.COLOR_BGR2GRAY)
+        img_frame_diff_gray[:,-80:] = 0
         # plt.figure(figsize = (20,20))
         # plt.imshow(img_frame_diff_gray, cmap='gray')
 
@@ -455,13 +514,38 @@ for image in images:
                 object_area = w*h
                 X_x, P_x, u_x, F_x, H_x, R_x, I_x = reset_kalman_pos()
                 X_y, P_y, u_y, F_y, H_y, R_y, I_y = reset_kalman_pos()
+                X_pos_x, P_pos_x, u_pos_x, F_pos_x, H_pos_x, R_pos_x, I_pos_x = reset_kalman_pos()
+                X_pos_y, P_pos_y, u_pos_y, F_pos_y, H_pos_y, R_pos_y, I_pos_y = reset_kalman_pos()
+                X_pos_z, P_pos_z, u_pos_z, F_pos_z, H_pos_z, R_pos_z, I_pos_z = reset_kalman_pos()
                 X_depth, P_depth, u_depth, F_depth, H_depth, R_depth, I_depth = reset_kalman_depth()
                 new_object = False
+            # if w*h > object_area+100:
+            #     object_area = w*h
             if w*h > object_area-(object_area*0.1+object_occluded/500):
                 padding_width = int(w//20)
                 padding_height = int(h//20)
-                cv2.circle(img_frame_vis, (cX, cY), 5, (0, 255, 0), -1)
-                cv2.rectangle(img_frame_vis,(x,y),(x+w,y+h),(0,255,0),2)
+                obj_roi_to_save = img_frame[y-padding_height:y+h+padding_height,x-padding_width:x+w+padding_width]
+                obj_roi_name = 'obj_'+img_number
+                path_to_save = '/home/alex/Alex/DTU/Courses/perception/project/' + 'objects/right_occ_' + obj_roi_name
+                cv2.imwrite(path_to_save, obj_roi_to_save)
+                # classification_input = img_frame[y-padding_height:y+h+padding_height,x-padding_width:x+w+padding_width]
+                classification_input = img_frame[y:y+h,x:x+w]
+
+                # # plt.figure(figsize=(15,15))
+                # # plt.imshow(classification_input)
+                try:
+                    class_type_BoW = classifyBoW(classification_input)
+                    print("BoW:",class_type_BoW)
+                    class_type_CNN = classify_image(classification_input)
+                    print("CNN",class_type_CNN)
+                    cv2.circle(img_frame_vis, (cX, cY), 5, (0, 255, 0), -1)
+                    cv2.rectangle(img_frame_vis,(x,y),(x+w,y+h),(0,255,0),2)
+                    cv2.putText(img_frame_vis,"BoW:"+class_type_BoW, (x+padding_width, y+h+padding_height+10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 180, 0), 2)
+                    cv2.putText(img_frame_vis, "CNN:"+class_type_CNN, (x+padding_width, y+h+padding_height+30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 180, 255), 2)
+                except:
+                    print("ups")
                 # cv2.rectangle(img_frame_vis,(x-padding_width,y-padding_height),(x+w+padding_width,y+h+padding_height),(225,0,0),2)
                 # plt.figure(figsize=(15,15))
                 # plt.imshow(img_frame_vis)
@@ -511,19 +595,41 @@ for image in images:
                 depth_estimate_roi_sqrt = np.sqrt(depth_estimate_roi_sum)
                 distance = depth_estimate_roi_sqrt.min()/100
                 formatted_distance = "{:.2f}".format(distance)
+                formatted_x = "{:.2f}".format(np.median(depth_estimate_roi[:,:,0])/100)
+                formatted_y = "{:.2f}".format(np.median(depth_estimate_roi[:,:,1])/100)
+                formatted_z = "{:.2f}".format(np.median(depth_estimate_roi[:,:,2])/100)
                 # distance = sqrt(pow(depth_estimate[cent_y,cent_x,0],2)+pow(depth_estimate[cent_y,cent_x,1],2)+pow(depth_estimate[cent_y,cent_x,2],2))
                 print(formatted_distance)
                 distance_plot = "Dist: "+formatted_distance+" m"
+                position_plot_x = "X: "+formatted_x+" m"
+                position_plot_y = "Y: "+formatted_y+" m"
+                position_plot_z = "Z: "+formatted_z+" m"
                 cv2.putText(img_frame_vis, distance_plot, (x+padding_width, y-padding_height), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(img_frame_vis, position_plot_x, (50, 50), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(img_frame_vis, position_plot_y, (50, 70), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(img_frame_vis, position_plot_z, (50, 90), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(img_frame_vis,"BoW: "+class_type_BoW, (50, 110), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 180, 0), 2)
+                cv2.putText(img_frame_vis, "CNN: "+class_type_CNN, (50, 130), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 180, 255), 2)
 
                 ############## KALMAN UPDATE #########
 
                 z_x = np.array([[cX]])
                 z_y = np.array([[cY]])
+                z_pos_x = np.array([np.median(depth_estimate_roi[:,:,0])/100])
+                z_pos_y = np.array([np.median(depth_estimate_roi[:,:,1])/100])
+                z_pos_z = np.array([np.median(depth_estimate_roi[:,:,2])/100])
                 z_depth = np.array([[distance]])
                 X_x,P_x = update(X_x,P_x,z_x,H_x,R_x)
                 X_y,P_y = update(X_y,P_y,z_y,H_y,R_y)
+                X_pos_x,P_pos_x = update(X_pos_x,P_pos_x,z_pos_x,H_pos_x,R_pos_x)
+                X_pos_y,P_pos_y = update(X_pos_y,P_pos_y,z_pos_y,H_pos_y,R_pos_y)
+                X_pos_z,P_pos_z = update(X_pos_z,P_pos_z,z_pos_z,H_pos_z,R_pos_z)
                 X_depth,P_depth = update(X_depth,P_depth,z_depth,H_depth,R_depth)
                 klmn_cnt = klmn_cnt+1
                 if object_occluded>10:
@@ -534,16 +640,56 @@ for image in images:
                 cv2.circle(img_frame_vis, (X_x[0], X_y[0]), 5, (255, 0, 255), -1)
                 # cv2.rectangle(img_frame_vis,(x,y),(x+w,y+h),(255,0,255),2)
                 formatted_distance = "{:.2f}".format(float(X_depth[0]))
+                formatted_x = "{:.2f}".format(float(X_pos_x[0]))
+                formatted_y = "{:.2f}".format(float(X_pos_y[0]))
+                formatted_z = "{:.2f}".format(float(X_pos_z[0]))
                 distance_plot = "Dist: "+formatted_distance+" m"
+                position_plot_x = "X: "+formatted_x+" m"
+                position_plot_y = "Y: "+formatted_y+" m"
+                position_plot_z = "Z: "+formatted_z+" m"
                 cv2.putText(img_frame_vis, distance_plot, (X_x[0]+padding_width, X_y[0]-padding_height), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                cv2.putText(img_frame_vis,"BoW:"+class_type_BoW, (X_x[0]+padding_width, X_y[0]-padding_height+20), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                cv2.putText(img_frame_vis, "CNN:"+class_type_CNN, (X_x[0]+padding_width, X_y[0]-padding_height+40), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                cv2.putText(img_frame_vis, position_plot_x, (50, 50), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                cv2.putText(img_frame_vis, position_plot_y, (50, 70), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                cv2.putText(img_frame_vis, position_plot_z, (50, 90), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                cv2.putText(img_frame_vis,"BoW: "+class_type_BoW, (50, 110), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                cv2.putText(img_frame_vis, "CNN: "+class_type_CNN, (50, 130), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
                 object_occluded = object_occluded+1
         else:
             ########### PLOTING PREDICTION k-1 ##########
             cv2.circle(img_frame_vis, (X_x[0], X_y[0]), 5, (255, 0, 255), -1)
             formatted_distance = "{:.2f}".format(float(X_depth[0]))
+            formatted_x = "{:.2f}".format(X_pos_x[0])
+            formatted_y = "{:.2f}".format(X_pos_y[0])
+            formatted_z = "{:.2f}".format(X_pos_z[0])
             distance_plot = "Dist: "+formatted_distance+" m"
+            position_plot_x = "X: "+formatted_x+" m"
+            position_plot_y = "Y: "+formatted_y+" m"
+            position_plot_z = "Z: "+formatted_z+" m"
             cv2.putText(img_frame_vis, distance_plot, (X_x[0]+padding_width, X_y[0]-padding_height), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            cv2.putText(img_frame_vis,"BoW:"+class_type_BoW, (X_x[0]+padding_width, X_y[0]-padding_height+20), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            cv2.putText(img_frame_vis, "CNN:"+class_type_CNN, (X_x[0]+padding_width, X_y[0]-padding_height+40), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            cv2.putText(img_frame_vis, position_plot_x, (50, 50), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            cv2.putText(img_frame_vis, position_plot_y, (50, 70), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            cv2.putText(img_frame_vis, position_plot_z, (50, 90), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            cv2.putText(img_frame_vis,"BoW: "+class_type_BoW, (50, 110), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            cv2.putText(img_frame_vis, "CNN: "+class_type_CNN, (50, 130), 
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
             object_occluded = object_occluded+1
         print("Current: ", cX, cY,distance)
@@ -553,6 +699,9 @@ for image in images:
 
         X_x,P_x = predict(X_x,P_x,F_x,u_x)
         X_y,P_y = predict(X_y,P_y,F_y,u_y)
+        X_pos_x,P_pos_x = predict(X_pos_x,P_pos_x,F_pos_x,u_pos_x)
+        X_pos_y,P_pos_y = predict(X_pos_y,P_pos_y,F_pos_y,u_pos_y)
+        X_pos_z,P_pos_z = predict(X_pos_z,P_pos_z,F_pos_z,u_pos_z)
         X_depth,P_depth = predict(X_depth,P_depth,F_depth,u_depth)
         print("Predicted: ", np.int(X_x[0]), np.int(X_y[0]), X_depth[0])
         # cv2.circle(img_frame_vis, (np.int(X_x[0]), np.int(X_y[0])), 5, (255,0,255), -1)
@@ -564,7 +713,7 @@ for image in images:
         cv2.imwrite(path_process_to_save, cv2.cvtColor(img_frame_vis, cv2.COLOR_RGB2BGR))
     else:
         cv2.imwrite(path_process_to_save, cv2.cvtColor(img_frame_vis, cv2.COLOR_RGB2BGR))
-
+    
 
 
 
@@ -1036,15 +1185,15 @@ for image in images:
 #         plt.imshow(labels_mask)
 
 #     cnt2=cnt2+1
-# # %%
-# ############## APPROACH #3 ################
+# %%
+############## APPROACH #3 ################
 # import skimage
 # from skimage import measure
 
 # for image in images:
 
 #     img_frame = cv2.imread(image)
-#     img_frame = img_frame[250:700,400:1150]
+#     # img_frame = img_frame[250:700,400:1150]
 #     img_frame_vis = img_frame.copy()
 #     img_frame_vis = cv2.cvtColor(img_frame_vis, cv2.COLOR_BGR2RGB)
 #     img_frame_hsv = cv2.cvtColor(img_frame, cv2.COLOR_BGR2HSV)
@@ -1055,7 +1204,7 @@ for image in images:
 
 #     #*********** HSV Segmentation *************
 
-#     img_frame_diff_hsv = cv2.absdiff(img_baseline_conveyor_hsv, img_frame_hsv)
+#     img_frame_diff_hsv = cv2.absdiff(img_baseline_hsv, img_frame_hsv)
 #     img_frame_diff_bgr = cv2.cvtColor(img_frame_diff_hsv, cv2.COLOR_HSV2BGR)
 #     img_frame_diff_gray = cv2.cvtColor(img_frame_diff_bgr, cv2.COLOR_BGR2GRAY)
 #     # plt.figure(figsize = (20,20))
@@ -1080,7 +1229,7 @@ for image in images:
 
 #     #*********** BGR Segmentation *************
 
-#     img_frame_diff_bgr = cv2.absdiff(img_baseline_conveyor, img_frame)
+#     img_frame_diff_bgr = cv2.absdiff(img_baseline, img_frame)
 #     img_frame_diff_gray = cv2.cvtColor(img_frame_diff_bgr, cv2.COLOR_BGR2GRAY)
 #     # plt.figure(figsize = (20,20))
 #     # plt.imshow(img_frame_diff_gray, cmap='gray')
@@ -1151,75 +1300,77 @@ for image in images:
 #         cv2.rectangle(img_frame_vis,(x-padding_width,y-padding_height),(x+w+padding_width,y+h+padding_height),(225,0,0),2)
 #         obj_roi_to_save = img_frame[y-padding_height:y+h+padding_height,x-padding_width:x+w+padding_width]
 #         obj_roi_name = 'obj_'+str(cnt_obj).zfill(6)+'.png'
-#         path_to_save = '/home/alex/Alex/DTU/Courses/perception/project/' + 'objects/left_' + obj_roi_name
+#         path_to_save = '/home/alex/Alex/DTU/Courses/perception/project/' + 'objects/right_' + obj_roi_name
 #         cv2.imwrite(path_to_save, obj_roi_to_save)
 #     plt.figure(figsize=(15,15))
 #     plt.imshow(img_frame_vis)
 
-# # %%
-# # img = cv2.imread('1585434279_805531979_Left.png')
-# # # convert image to grayscale image
-# # gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# # # %%
+# # # img = cv2.imread('1585434279_805531979_Left.png')
+# # # # convert image to grayscale image
+# # # gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-# # # convert the grayscale image to binary image
-# # ret,thresh = cv2.threshold(gray_image,127,255,0)
+# # # # convert the grayscale image to binary image
+# # # ret,thresh = cv2.threshold(gray_image,127,255,0)
 
-# # # calculate moments of binary image
-# # M = cv2.moments(thresh)
+# # # # calculate moments of binary image
+# # # M = cv2.moments(thresh)
 
-# # # calculate x,y coordinate of center
-# # cX = int(M["m10"] / M["m00"])
-# # cY = int(M["m01"] / M["m00"])
+# # # # calculate x,y coordinate of center
+# # # cX = int(M["m10"] / M["m00"])
+# # # cY = int(M["m01"] / M["m00"])
 
-# # # put text and highlight the center
-# # cv2.circle(img, (cX, cY), 5, (255, 255, 255), -1)
-# # cv2.putText(img, "centroid", (cX - 25, cY - 25),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+# # # # put text and highlight the center
+# # # cv2.circle(img, (cX, cY), 5, (255, 255, 255), -1)
+# # # cv2.putText(img, "centroid", (cX - 25, cY - 25),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
 
-# # # display the image
-# # plt.figure(figsize=(15,15))
-# # plt.imshow(img)
-
-
+# # # # display the image
+# # # plt.figure(figsize=(15,15))
+# # # plt.imshow(img)
 
 
-# # %%
-# # list_of_objects_roii = ['1585434283_721692085_Left.png', '1585434290_857062101_Left.png', '1585434296_598551989_Left.png', '1585434302_705101967_Left.png', '1585434309_475411892_Left.png', '1585434315_681521893_Left.png', '1585434323_547031879_Left.png']
-# # for imagen in list_of_objects_roii:
-# #     img2 = cv2.imread(imagen)
-# #     img_left2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
-# #     gray_left2 = cv2.cvtColor(img_left2, cv2.COLOR_RGB2GRAY)
-# #     object_roi = gray_left2[250:400,975:1150]
-# #     plt.figure(figsize=(12,12))
-# #     plt.imshow(object_roi,cmap='gray')
-# #     cv2.waitKey(15)
 
-# # criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-# # for i in range(left_count):
-# #     imgL = cv2.imread(images_l[i])
-# #     imgR = cv2.imread(images_r[i])
-# #     grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
-# #     grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
 
-# #     outputL = imgL.copy()
-# #     outputR = imgR.copy()
+# # # %%
+# # # list_of_objects_roii = ['1585434283_721692085_Left.png', '1585434290_857062101_Left.png', '1585434296_598551989_Left.png', '1585434302_705101967_Left.png', '1585434309_475411892_Left.png', '1585434315_681521893_Left.png', '1585434323_547031879_Left.png']
+# # # for imagen in list_of_objects_roii:
+# # #     img2 = cv2.imread(imagen)
+# # #     img_left2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+# # #     gray_left2 = cv2.cvtColor(img_left2, cv2.COLOR_RGB2GRAY)
+# # #     object_roi = gray_left2[250:400,975:1150]
+# # #     plt.figure(figsize=(12,12))
+# # #     plt.imshow(object_roi,cmap='gray')
+# # #     cv2.waitKey(15)
 
-# #     retR, cornersR =  cv2.findChessboardCorners(outputR,(nb_vertical,nb_horizontal),None)
-# #     retL, cornersL = cv2.findChessboardCorners(outputL,(nb_vertical,nb_horizontal),None)
+# # # criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+# # # for i in range(left_count):
+# # #     imgL = cv2.imread(images_l[i])
+# # #     imgR = cv2.imread(images_r[i])
+# # #     grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
+# # #     grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
 
-# #     if retR and retL:
-# #         objpoints.append(objp)
-# #         imgpointsL.append(cornersL)
-# #         imgpointsR.append(cornersR)
+# # #     outputL = imgL.copy()
+# # #     outputR = imgR.copy()
+
+# # #     retR, cornersR =  cv2.findChessboardCorners(outputR,(nb_vertical,nb_horizontal),None)
+# # #     retL, cornersL = cv2.findChessboardCorners(outputL,(nb_vertical,nb_horizontal),None)
+
+# # #     if retR and retL:
+# # #         objpoints.append(objp)
+# # #         imgpointsL.append(cornersL)
+# # #         imgpointsR.append(cornersR)
         
-# #         cv2.cornerSubPix(grayR,cornersR,(11,11),(-1,-1),criteria)
-# #         cv2.cornerSubPix(grayL,cornersL,(11,11),(-1,-1),criteria)
-# #         cv2.drawChessboardCorners(outputR,(9,6),cornersR,retR)
-# #         cv2.drawChessboardCorners(outputL,(9,6),cornersL,retL)
-# #         cv2.imshow('cornersR',outputR)
-# #         cv2.imshow('cornersL',outputL)
-# #         cv2.waitKey(150)
+# # #         cv2.cornerSubPix(grayR,cornersR,(11,11),(-1,-1),criteria)
+# # #         cv2.cornerSubPix(grayL,cornersL,(11,11),(-1,-1),criteria)
+# # #         cv2.drawChessboardCorners(outputR,(9,6),cornersR,retR)
+# # #         cv2.drawChessboardCorners(outputL,(9,6),cornersL,retL)
+# # #         cv2.imshow('cornersR',outputR)
+# # #         cv2.imshow('cornersL',outputL)
+# # #         cv2.waitKey(150)
         
-# # cv2.destroyAllWindows()
+# # # cv2.destroyAllWindows()
 
+
+# # # %%
 
 # # %%
