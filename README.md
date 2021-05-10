@@ -3,5 +3,6 @@ This is the repository for the final project of the course Perception for Autono
 
 
 ## Part 3: Classification 
-You need to have and load the model to do the classification on test frames.
+In the folder Bag of Word it is present the code used to train and test the model and the relative dataset.
+For the CNN you need to have and load the model to do the classification on test frames.
 You can (hopefully) download the model from here: https://drive.google.com/file/d/12Ici5VOCXmodtfbxUkUyBLedduvM0FJR/view?usp=sharing
